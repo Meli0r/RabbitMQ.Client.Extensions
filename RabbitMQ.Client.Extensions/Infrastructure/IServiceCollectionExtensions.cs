@@ -1,11 +1,12 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using RabbitMQ.Client.Extensions.Configuration;
+using RabbitMQ.Client.Extensions.Infrastructure;
 using RabbitMQ.Client.Extensions.Interfaces;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace RabbitMQ.Client.Extensions.Infrastructure
+namespace RabbitMQ.Client.Extensions
 {
     public static class IServiceCollectionExtensions
     {
@@ -32,6 +33,13 @@ namespace RabbitMQ.Client.Extensions.Infrastructure
                 opts.VirtualHost = rabbitConnection.VirtualHost;
             });
             services.AddSingleton<IRabbitConnectionManager, RabbitConnectionManager>();
+            return services;
+        }
+
+        public static IServiceCollection AddRabbitMqRpcClient(this IServiceCollection services, RabbitQueue requestRabbitQueue)
+        {
+            services.AddSingleton(sp => requestRabbitQueue);
+            services.AddSingleton<IRpcClient, AsyncRpcClient>();
             return services;
         }
     }

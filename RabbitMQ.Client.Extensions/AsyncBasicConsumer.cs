@@ -25,7 +25,6 @@ namespace RabbitMQ.Client.Extensions
         {
             try
             {
-                
                 _channel.QueueDeclare(rabbitQueue);
                 _consumer = new AsyncEventingBasicConsumer(_channel);
                 _consumer.Received += AsyncDataHandler;

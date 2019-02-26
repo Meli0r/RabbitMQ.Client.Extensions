@@ -41,7 +41,7 @@ namespace RabbitMQ.Client.Extensions
         public byte[] Call(RabbitTransportMessage message)
         {
             _props = _channel.CreateBasicProperties();
-            if (message.Headers != null || message.Headers.Count > 0) _props.Headers = message.Headers;
+           if (message.Headers != null && message.Headers.Count > 0) _props.Headers = message.Headers;
             var correlationId = Guid.NewGuid().ToString();
             _props.CorrelationId = correlationId;
             _props.ReplyTo = _replyQueue.QueueName;
