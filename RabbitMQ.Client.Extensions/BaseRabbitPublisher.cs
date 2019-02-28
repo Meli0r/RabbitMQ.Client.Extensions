@@ -18,7 +18,7 @@ namespace RabbitMQ.Client.Extensions
 
         public void Send(RabbitQueue rabbitQueue, RabbitTransportMessage message)
         {
-            using (var channel = _rabbitChannelManager.Channel)
+            using (var channel = _rabbitChannelManager.GetChannel())
             {
                 channel.QueueDeclare(rabbitQueue);
                 var props = channel.CreateBasicProperties();
@@ -32,7 +32,7 @@ namespace RabbitMQ.Client.Extensions
 
         public void Send(RabbitExchange rabbitExchange, RabbitTransportMessage message)
         {
-            using (var channel = _rabbitChannelManager.Channel)
+            using (var channel = _rabbitChannelManager.GetChannel())
             {
                 channel.ExchangeDeclare(rabbitExchange);
                 var props = channel.CreateBasicProperties();

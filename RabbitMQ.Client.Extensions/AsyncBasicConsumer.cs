@@ -17,7 +17,7 @@ namespace RabbitMQ.Client.Extensions
 
         public AsyncBasicConsumer(IRabbitConnectionManager rabbitConnectionManager, ILogger<AsyncBasicConsumer> logger)
         {
-            _channel = rabbitConnectionManager.Channel;
+            _channel = rabbitConnectionManager.GetChannel();
             _logger = logger;
         }
 

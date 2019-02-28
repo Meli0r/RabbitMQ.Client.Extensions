@@ -9,49 +9,81 @@ using Microsoft.Extensions.Logging;
 using RabbitMQ.Client.Extensions.Configuration;
 using RabbitMQ.Client.Extensions.Infrastructure;
 using RabbitMQ.Client.Extensions.Models;
+using Microsoft.Extensions.Options;
+using System.Linq;
+using System.Threading.Tasks.Dataflow;
 
 namespace RabbitMQ.Client.Extensions
 {
-    public interface IRpcClient
+    public interface IRpcClient: IDisposable
     {
-        byte[] Call(RabbitTransportMessage message);
+        Task<byte[]> Call(RabbitTransportMessage message);
     }
 
-    public class AsyncRpcClient : AsyncBasicConsumer, IRpcClient
+    public class AsyncRpcClient : IRpcClient
     {
+        private readonly int _threadCount;
+        private readonly IRabbitConnectionManager _rabbitConnectionManager;
         private readonly RabbitQueue _requestQueue;
         private readonly RabbitQueue _replyQueue = RabbitQueue.GetDirectReplyToQueue();
-        private readonly BlockingCollection<byte[]> respQueue = new BlockingCollection<byte[]>();
-        private IBasicProperties _props;
+        private ConcurrentDictionary<IBasicProperties, IModel> _channelsInUse = new ConcurrentDictionary<IBasicProperties,IModel>();
+        private readonly BufferBlock<byte[]> _respQueue = new BufferBlock<byte[]>();
 
-        public AsyncRpcClient(RabbitQueue rpcRabbitQueue, IRabbitConnectionManager rabbitChannelManager, ILogger<AsyncRpcClient> logger) : base(rabbitChannelManager, logger)
+        public AsyncRpcClient(IOptions<RpcClientConfiguration> rpcClientConfiguration, IRabbitConnectionManager rabbitConnectionManager, ILogger<AsyncRpcClient> logger)
         {
-            _requestQueue = rpcRabbitQueue;
-            StartConsuming(_replyQueue, true);
-        }
+            _requestQueue = rpcClientConfiguration.Value.RequestQueue;
+            _threadCount = rpcClientConfiguration.Value.ThreadCount;
+            _rabbitConnectionManager = rabbitConnectionManager;
 
-        public override sealed async Task AsyncDataHandler(object sender, BasicDeliverEventArgs @event)
-        {
-            if (@event.BasicProperties.CorrelationId == _props.CorrelationId)
+            for (int i = 0; i < _threadCount; i++)
             {
-                respQueue.Add(@event.Body);
+                var channel = _rabbitConnectionManager.GetChannel();
+                var props = channel.CreateBasicProperties();
+                var correlationId = Guid.NewGuid().ToString();
+                props.CorrelationId = correlationId;
+                props.ReplyTo = _replyQueue.QueueName;
+                _channelsInUse.TryAdd(props, channel);
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                
+
+                consumer.Received += async (model, ea) =>
+                {
+                    var response = ea.Body;
+                    if (_channelsInUse.Keys.Select(x => x.CorrelationId).Contains(ea.BasicProperties.CorrelationId))
+                    {
+                        await _respQueue.SendAsync(response);
+                    }
+                };
+
+                channel.BasicConsume(_replyQueue.QueueName, true, consumer);
             }
         }
 
-        public byte[] Call(RabbitTransportMessage message)
+        public async Task<byte[]> Call(RabbitTransportMessage message)
         {
-            _props = _channel.CreateBasicProperties();
-           if (message.Headers != null && message.Headers.Count > 0) _props.Headers = message.Headers;
-            var correlationId = Guid.NewGuid().ToString();
-            _props.CorrelationId = correlationId;
-            _props.ReplyTo = _replyQueue.QueueName;
+            
+                var enumerator = _channelsInUse.GetEnumerator();
+                var res = enumerator.MoveNext();
 
-            _channel.BasicPublish(
+                var props = enumerator.Current.Key;
+                var channel = enumerator.Current.Value;
+
+            channel.BasicPublish(
                 exchange: RabbitExchange.GetDefault().ExchangeName,
                 routingKey: _requestQueue.QueueName,
-                basicProperties: _props,
+                basicProperties: props,
                 body: message.BodyBytes);
-            return respQueue.Take();
+
+            return await _respQueue.ReceiveAsync();
+        }
+
+        public void Dispose()
+        {
+            foreach (var item in _channelsInUse)
+            {
+                item.Value.Close();
+                item.Value.Dispose();
+            }
         }
     }
 }

@@ -12,6 +12,8 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Threading;
+using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
 
 namespace RabbitMQ.Client.Extensions
 {
@@ -20,44 +22,61 @@ namespace RabbitMQ.Client.Extensions
         protected readonly ILogger _logger;
         private readonly RabbitQueue _requestQueue;
         private readonly IRabbitConnectionManager _rabbitConnectionManager;
-        private IModel _channel;
+        private readonly int _threadCount;
+        private ConcurrentDictionary<string, IModel> _channelsInUse;
 
-        public AsyncBasicRpcServer(RabbitQueue rpcRabbitQueue, IRabbitConnectionManager  rabbitConnectionManager, ILogger<AsyncBasicRpcServer> logger)
+        public AsyncBasicRpcServer(IOptions<RpcServerConfiguration> rpcServerConfiguration, IRabbitConnectionManager  rabbitConnectionManager, ILogger logger)
         {
-            _requestQueue = rpcRabbitQueue;
+            var options = rpcServerConfiguration.Value;
+            _requestQueue = options.RequestQueue;
+            _threadCount = options.ThreadCount ?? 1;
             _rabbitConnectionManager = rabbitConnectionManager;
+            _channelsInUse = new ConcurrentDictionary<string, IModel>();
             _logger = logger;
-            _channel = _rabbitConnectionManager.Channel;
         }
 
         public abstract Task<RabbitTransportMessage> GetResponseAsync(byte[] requestBody);
 
-        public Task StartAsync(CancellationToken cancellationToken)
+        public async Task StartAsync(CancellationToken cancellationToken)
         {
-            return Task.Run(() => RunAsync(), cancellationToken);
+            _logger.LogInformation("RPC Server started.");
+            var tasks = new List<Task>();
+            for (int i = 0; i < _threadCount; i++)
+            {
+                tasks.Add(Task.Factory.StartNew(() => RunAsync(), cancellationToken));
+            }
+            await Task.WhenAll(tasks);
         }
 
         public Task StopAsync(CancellationToken cancellationToken)
         {
             return Task.Run(() => {
-                _channel.Close();
-                _channel.Dispose();
-                _logger.LogInformation("RpcServer stopped. Channel disposed.");
+                foreach (var channel in _channelsInUse)
+                {
+                    channel.Value.Close();
+                    channel.Value.Dispose();
+                    _logger.LogInformation(channel.Key + " disposed.");
+                }
+                _logger.LogInformation("RpcServer stopped.");
             },cancellationToken);
         }
 
         private async Task RunAsync()
         {
-            _channel.QueueDeclare(_requestQueue);
-            _channel.BasicQos(0, 1, false);
-            var consumer = new AsyncEventingBasicConsumer(_channel);
-            _channel.BasicConsume(_requestQueue.QueueName, autoAck: true, consumer: consumer);
+            var channelId = "RpcServerChannel_" + Guid.NewGuid();
+            _channelsInUse.TryAdd(channelId, _rabbitConnectionManager.GetChannel());
+            IModel channel;
+            _channelsInUse.TryGetValue(channelId, out channel);
+            channel.QueueDeclare(_requestQueue);
+            channel.BasicQos(0, 1, false);
+            var consumer = new AsyncEventingBasicConsumer(channel);
+            channel.BasicConsume(_requestQueue.QueueName, autoAck: true, consumer: consumer);
 
             consumer.Received += async (model, ea) =>
             {
                 var body = ea.Body;
                 var props = ea.BasicProperties;
-                var replyProps = _channel.CreateBasicProperties();
+                var replyProps = channel.CreateBasicProperties();
 
                 var response = await GetResponseAsync(ea.Body);
 
@@ -67,7 +86,7 @@ namespace RabbitMQ.Client.Extensions
                 }
                 replyProps.CorrelationId = props.CorrelationId;
 
-                _channel.BasicPublish(exchange: "", routingKey: props.ReplyTo, basicProperties: replyProps, body: response.BodyBytes);
+                channel.BasicPublish(exchange: "", routingKey: props.ReplyTo, basicProperties: replyProps, body: response.BodyBytes);
             };
         }
     }

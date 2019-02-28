@@ -3,6 +3,7 @@ using RabbitMQ.Client.Extensions.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System;
+using System.Collections.Concurrent;
 
 namespace RabbitMQ.Client.Extensions.Infrastructure
 {
@@ -36,9 +37,7 @@ namespace RabbitMQ.Client.Extensions.Infrastructure
 
         public IConnection Connection { get; private set; }
         
-        public IModel Channel
-        {
-            get { return Connection.CreateModel(); }
-        }
+        public IModel GetChannel() { return Connection.CreateModel(); }
+        
     }
 }

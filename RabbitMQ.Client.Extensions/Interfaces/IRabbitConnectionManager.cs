@@ -3,6 +3,6 @@
     public interface IRabbitConnectionManager
     {
         IConnection Connection { get; }
-        IModel Channel { get; }
+        IModel GetChannel();
     }
 }
