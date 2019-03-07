@@ -48,9 +48,9 @@ namespace RabbitMQ.Client.Extensions
             await Task.WhenAll(tasks);
         }
 
-        public Task StopAsync(CancellationToken cancellationToken)
+        public async Task StopAsync(CancellationToken cancellationToken)
         {
-            return Task.Run(() => {
+            await Task.Run(() => {
                 foreach (var channel in _channelsInUse)
                 {
                     channel.Value.Close();
@@ -63,31 +63,40 @@ namespace RabbitMQ.Client.Extensions
 
         private async Task RunAsync()
         {
-            var channelId = "RpcServerChannel_" + Guid.NewGuid();
-            _channelsInUse.TryAdd(channelId, _rabbitConnectionManager.GetChannel());
-            IModel channel;
-            _channelsInUse.TryGetValue(channelId, out channel);
-            channel.QueueDeclare(_requestQueue);
-            channel.BasicQos(0, 1, false);
-            var consumer = new AsyncEventingBasicConsumer(channel);
-            channel.BasicConsume(_requestQueue.QueueName, autoAck: true, consumer: consumer);
-
-            consumer.Received += async (model, ea) =>
+            try
             {
-                var body = ea.Body;
-                var props = ea.BasicProperties;
-                var replyProps = channel.CreateBasicProperties();
+                var channelId = "RpcServerChannel_" + Guid.NewGuid();
+                _channelsInUse.TryAdd(channelId, _rabbitConnectionManager.GetChannel());
+                IModel channel;
+                _channelsInUse.TryGetValue(channelId, out channel);
+                channel.QueueDeclare(_requestQueue);
+                channel.BasicQos(0, 1, false);
+                var consumer = new AsyncEventingBasicConsumer(channel);
+                channel.BasicConsume(_requestQueue.QueueName, autoAck: true, consumer: consumer);
 
-                var response = await GetResponseAsync(ea.Body);
-
-                if (response.Headers != null && response.Headers.Count > 0)
+                consumer.Received += async (model, ea) =>
                 {
-                    props.Headers = response.Headers.ToDictionary(h => h.Key, h => (object)h.Value);
-                }
-                replyProps.CorrelationId = props.CorrelationId;
+                    var body = ea.Body;
+                    var props = ea.BasicProperties;
+                    var replyProps = channel.CreateBasicProperties();
 
-                channel.BasicPublish(exchange: "", routingKey: props.ReplyTo, basicProperties: replyProps, body: response.BodyBytes);
-            };
+                    var response = await GetResponseAsync(ea.Body);
+
+                    if (response.Headers != null && response.Headers.Count > 0)
+                    {
+                        props.Headers = response.Headers.ToDictionary(h => h.Key, h => (object)h.Value);
+                    }
+                    replyProps.CorrelationId = props.CorrelationId;
+
+                    channel.BasicPublish(exchange: "", routingKey: props.ReplyTo, basicProperties: replyProps, body: response.BodyBytes);
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError("{@Exception} occured during RPC Server processing", ex);
+                throw;
+            }
+            
         }
     }
 }
