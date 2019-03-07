@@ -57,7 +57,7 @@ namespace RabbitMQ.Client.Extensions
             var correlationId = Guid.NewGuid().ToString();
             var cts = new CancellationTokenSource(_timeout);
             cts.Token.Register(() => tcs.TrySetException(new TimeoutException(string.Format(
-                "Request timeout on {0}. {1} response not recieved in {2} ms!", correlationId, Encoding.UTF8.GetString(message.BodyBytes), _timeout.Milliseconds.ToString()
+                "Request timeout on {0}. {1} response not recieved in {2} ms!", correlationId, Encoding.UTF8.GetString(message.BodyBytes), _timeout.TotalMilliseconds
                 ))), false);
             _pendingMessages.TryAdd(correlationId, tcs);
 
